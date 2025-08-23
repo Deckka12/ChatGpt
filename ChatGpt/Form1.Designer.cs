@@ -40,6 +40,8 @@
             this.textBox1.Name = "textBox1";
             this.textBox1.Size = new System.Drawing.Size(193, 170);
             this.textBox1.TabIndex = 0;
+            this.textBox1.Text = "Приввет сделай мне запрос по таблице MainInfo У типа CardDocument , где полсе sta" +
+    "te  с нулевым гуидом";
             // 
             // textBox2
             // 

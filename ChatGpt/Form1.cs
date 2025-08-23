@@ -44,14 +44,25 @@ namespace ChatGpt
             // Загружаем schema в Chroma
             await chroma.UpsertAsync(collectionId, chunks.Select((c, i) => ($"doc_{i}", c.Content)).ToList());
 
-            // Делаем запрос
-            var relevant = await chroma.QueryAsync(collectionId, textBox1.Text, 3);
-            var context = string.Join("\n---\n", relevant);
+            var relevant = await chroma.QueryAsync(
+    collectionId,
+    textBox1.Text,
+    n: 683,
+    mustContain1: "CardType: CardDocument",
+    mustContain2: "Section: MainInfo" // или "SectionId: 807CC9CB-3D78-486C-84B0-B3FAE8C54A12"
+);
+
+            var context = string.Join("\n---\n", relevant.Take(3));
+
+
+
 
             var ollama = new OllamaClient();
             var answer = await ollama.AskAsync(textBox1.Text, context);
 
             textBox2.Text = "\nОтвет:\n" + answer;
         }
+
+
     }
 }

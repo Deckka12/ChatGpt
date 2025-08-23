@@ -148,6 +148,7 @@
   <ItemGroup>
     <Compile Include="ChromaClient.cs" />
     <Compile Include="ChunkBuilder.cs" />
+    <Compile Include="ChunkHeader.cs" />
     <Compile Include="DVSchema.cs" />
     <Compile Include="Form1.cs">
       <SubType>Form</SubType>
