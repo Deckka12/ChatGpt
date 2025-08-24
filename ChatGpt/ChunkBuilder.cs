@@ -66,8 +66,7 @@ namespace ChatGpt
 
                     foreach (var f in ordered)
                     {
-                        var typed = FormatType(f.alias, f.type, f.max);
-                        sb.AppendLine("- " + f.alias + " " + typed);
+                        sb.AppendLine(FormatColumnLine(f));
                     }
 
                     // Примеры запросов — только по реально существующим полям в этой секции
@@ -80,7 +79,6 @@ namespace ChatGpt
                     if (HasField(fields, "Name"))
                         sb.AppendLine("- FindByName: SELECT TOP 50 InstanceID, Name FROM dvtable_{" + sectionId + "} WHERE Name LIKE @name;");
 
-                    // Можно добавить Created/CreatedBy, если встречаются часто
                     if (HasField(fields, "Created"))
                         sb.AppendLine("- RecentCreated: SELECT TOP 100 * FROM dvtable_{" + sectionId + "} WHERE Created >= @fromDate ORDER BY Created DESC;");
 
@@ -195,6 +193,78 @@ namespace ChatGpt
                     // по умолчанию NVARCHAR
                     return max > 0 ? "NVARCHAR(" + max + ")" : "NVARCHAR(MAX)";
             }
+        }
+
+        /// <summary>
+        /// Форматирует строку для колонки. Для REF добавляет цель из references
+        /// и, при необходимости, хинт по JOIN (для RefStaff.* → JOIN <Section>.RowID).
+        /// </summary>
+        private static string FormatColumnLine(Field f)
+        {
+            var typed = FormatType(f.alias, f.type, f.max);
+
+            if ((f.type == 13 || f.type == 14) && f.references != null)
+            {
+                var target = BuildReferenceTarget(f.references);
+                if (!string.IsNullOrWhiteSpace(target))
+                {
+                    var joinHint = BuildJoinHint(f.references) ?? string.Empty;
+                    return "- " + f.alias + " " + typed + " \u2192 " + target + joinHint; // →
+                }
+            }
+
+            return "- " + f.alias + " " + typed;
+        }
+
+        /// <summary>
+        /// Строит читаемую цель для ссылки: сначала references.target,
+        /// затем card_type_alias.section_alias, затем section_alias.
+        /// </summary>
+        private static string BuildReferenceTarget(Reference r)
+        {
+            if (r == null) return null;
+            if (!string.IsNullOrWhiteSpace(r.target)) return r.target.Trim();
+
+            var card = (r.card_type_alias ?? "").Trim();
+            var sec = (r.section_alias ?? "").Trim();
+
+            if (!string.IsNullOrEmpty(card) && !string.IsNullOrEmpty(sec))
+                return card + "." + sec;
+
+            if (!string.IsNullOrEmpty(sec))
+                return sec;
+
+            return null;
+        }
+
+        /// <summary>
+        /// Возвращает JOIN‑хинт для известных справочников.
+        /// Сейчас: для любых ссылок на RefStaff.* → (JOIN <SectionAlias>.RowID)
+        /// </summary>
+        private static string BuildJoinHint(Reference r)
+        {
+            if (r == null) return null;
+
+            string card = (r.card_type_alias ?? "").Trim();
+            string sec = (r.section_alias ?? "").Trim();
+            string tgt = (r.target ?? "").Trim();
+
+            bool isRefStaff =
+                card.Equals("RefStaff", StringComparison.OrdinalIgnoreCase) ||
+                tgt.StartsWith("RefStaff.", StringComparison.OrdinalIgnoreCase);
+
+            if (isRefStaff)
+            {
+                // Имя секции: берём section_alias, иначе из target после точки
+                string joinSection =
+                    !string.IsNullOrEmpty(sec)
+                        ? sec
+                        : (tgt.Contains(".") ? tgt.Substring(tgt.IndexOf('.') + 1) : "Employees");
+
+                return $" (JOIN {joinSection}.RowID)";
+            }
+
+            return null;
         }
 
         private static string SanitizeFileName(string name)

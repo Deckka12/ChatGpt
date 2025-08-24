@@ -26,6 +26,16 @@ namespace ChatGpt
         public bool is_dynamic { get; set; }
         public bool is_extended { get; set; }
         public bool is_new { get; set; }
+        public Reference references { get; set; }
+    }
+
+    public class Reference
+    {
+        public string section_type_id { get; set; }
+        public string section_alias { get; set; }
+        public string card_type_id { get; set; }
+        public string card_type_alias { get; set; }
+        public string target { get; set; }
     }
 
 }

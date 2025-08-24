@@ -56,11 +56,11 @@ namespace ChatGpt
 
         private static readonly string SchemaPath = Path.Combine(
     Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-    "dv_schema_with_full_alias_final.json"  // перенеси сюда файл, либо поменяй путь как тебе удобно
+    "Test.json"  // перенеси сюда файл, либо поменяй путь как тебе удобно
 );
         private static readonly string ChromaUrl = "http://localhost:8000";
         private static readonly string OllamaUrl = "http://localhost:11434";
-        private static readonly string CollectionName = "dv_schema";
+        private static readonly string CollectionName = "dv_schema1";
 
         private static bool _schemaIndexed = false;
         private static string _collectionId = null;
@@ -87,6 +87,9 @@ namespace ChatGpt
                 // 1) Готовим коллекцию в Chroma (один раз)
                 if (string.IsNullOrWhiteSpace(_collectionId))
                     _collectionId = await _chroma.EnsureCollectionAsync(CollectionName);
+
+                //await _chroma.DeleteAllDocumentsAsync(_collectionId);
+
 
                 // 2) Индексируем схему только один раз за запуск
                 if (!_schemaIndexed)
@@ -166,7 +169,7 @@ namespace ChatGpt
             }
             catch (Exception ex)
             {
-                textBox2.Text = "Ошибка: " + ex.Message;
+                textBox2.Text = "Ошибка: " + ex.ToString();
             }
             finally
             {

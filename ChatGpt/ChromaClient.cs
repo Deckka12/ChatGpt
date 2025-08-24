@@ -239,4 +239,17 @@ public class ChromaDirect
             return new List<string>();
         }
     }
+    public async Task DeleteAllDocumentsAsync(string collectionId)
+    {
+        if (string.IsNullOrWhiteSpace(collectionId))
+            throw new ArgumentException("collectionId is null/empty", nameof(collectionId));
+
+        var payload = new { where = new { } }; // пустой фильтр = удалить всё
+        var json = System.Text.Json.JsonSerializer.Serialize(payload);
+        var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+        var resp = await _http.PostAsync($"/api/v1/collections/{collectionId}/delete", content);
+        resp.EnsureSuccessStatusCode();
+    }
+
 }
