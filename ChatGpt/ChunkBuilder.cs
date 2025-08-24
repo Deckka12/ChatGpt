@@ -8,74 +8,88 @@ namespace ChatGpt
 {
     public static class ChunkBuilder
     {
+        /// <summary>
+        /// Строит строго структурированные чанки по схеме.
+        /// Формат каждого чанка:
+        /// TABLE: dvtable_{SectionId}
+        /// CARD_TYPE: {card_type_alias}
+        /// CARD_TYPE_ID: {card_type_id}
+        /// SECTION: {section_alias}
+        /// SECTION_ID: {section_id}
+        /// PRIMARY_KEY: InstanceID GUID
+        /// COLUMNS:
+        /// - Name TYPE [длина]
+        /// QUERIES:
+        /// - ...
+        /// </summary>
         public static List<(string CardType, string Content)> BuildChunks(DVSchema schema)
         {
             var result = new List<(string, string)>();
-            if (schema?.sections == null) return result;
+            if (schema == null || schema.sections == null || schema.sections.Count == 0)
+                return result;
 
-            // ИТЕРИРУЕМ по KeyValuePair, чтобы видеть ключ = SectionId
+            // группируем секции по типу карточки
             var groupedByCard = schema.sections
                 .Where(kv => kv.Value != null)
                 .GroupBy(
-                    kv => string.IsNullOrWhiteSpace(kv.Value.card_type_alias)
-                        ? "UnknownCardType"
-                        : kv.Value.card_type_alias.Trim(),
+                    kv => SafeStr(kv.Value.card_type_alias, "UnknownCardType"),
                     StringComparer.OrdinalIgnoreCase
                 )
                 .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase);
 
-            foreach (var cardGroup in groupedByCard)
+            foreach (var card in groupedByCard)
             {
-                // GUID типа карточки один для всех её секций
-                var cardTypeId = cardGroup.FirstOrDefault().Value?.card_type_id
-                                 ?? "00000000-0000-0000-0000-000000000000";
+                var first = card.First().Value;
+                var cardTypeAlias = card.Key;
+                var cardTypeId = SafeStr(first.card_type_id, "00000000-0000-0000-0000-000000000000");
 
-                // Проходим по секциям ЭТОГО типа карточки
-                foreach (var kv in cardGroup.OrderBy(kv => kv.Value.alias ?? "", StringComparer.OrdinalIgnoreCase))
+                foreach (var kv in card.OrderBy(kv => SafeStr(kv.Value.alias, ""), StringComparer.OrdinalIgnoreCase))
                 {
+                    var sectionId = kv.Key; // это именно SectionId из JSON
                     var sec = kv.Value;
-                    var sectionId = kv.Key; // ключ словаря = SectionId из твоего JSON
+                    var sectionAlias = SafeStr(sec.alias, "UnknownSection");
 
-                    var sectionAlias = string.IsNullOrWhiteSpace(sec.alias) ? "UnknownSection" : sec.alias.Trim();
+                    // Собираем поля только из этой секции + гарантируем InstanceID
+                    var fields = CollectSectionColumns(sec);
+                    if (fields.Count == 0) continue;
 
-                    // Собираем только поля этой секции
-                    var cols = CollectSectionColumns(sec);
-                    if (cols.Count == 0) continue;
+                    var ordered = OrderColumns(fields);
 
-                    var ordered = OrderColumns(cols);
-
-                    // Формируем шапку в требуемом формате
                     var sb = new StringBuilder();
-                    sb.AppendLine($"CardType: {cardGroup.Key}");
-                    sb.AppendLine($"Section: {sectionAlias}");
-                    sb.AppendLine($"CardTypeId: {cardTypeId}");
-                    sb.AppendLine($"SectionId: {sectionId}");
-                    sb.AppendLine($"Table: dvtable_{{{sectionId}}}"); // как просил: таблица = dvtable_{SectionId}
-                    sb.AppendLine("Key: InstanceID");
-                    sb.AppendLine("Columns (partial):");
+                    sb.AppendLine("TABLE: dvtable_{" + sectionId + "}");
+                    sb.AppendLine("CARD_TYPE: " + cardTypeAlias);
+                    sb.AppendLine("CARD_TYPE_ID: " + cardTypeId);
+                    sb.AppendLine("SECTION: " + sectionAlias);
+                    sb.AppendLine("SECTION_ID: " + sectionId);
+                    sb.AppendLine("PRIMARY_KEY: InstanceID GUID");
+                    sb.AppendLine("COLUMNS:");
 
-                    foreach (var c in ordered)
+                    foreach (var f in ordered)
                     {
-                        var friendly = GuessFriendlyType(c.alias, c.type, c.max);
-                        sb.AppendLine(string.IsNullOrEmpty(friendly)
-                            ? $"  - {c.alias} (type={c.type}, max={c.max})"
-                            : $"  - {c.alias} ({friendly})");
+                        var typed = FormatType(f.alias, f.type, f.max);
+                        sb.AppendLine("- " + f.alias + " " + typed);
                     }
 
-                    // Подсказка про State — только если в этой секции есть поле State
-                    var hasState = cols.Any(c => c.alias.Equals("State", StringComparison.OrdinalIgnoreCase));
-                    if (hasState)
-                    {
-                        sb.AppendLine("Tip:");
-                        sb.AppendLine("  - Фильтровать по State без указания Section.");
-                        sb.AppendLine($"  - Пример: SELECT InstanceID FROM dvtable_{{{cardTypeId}}} WHERE State = '00000000-0000-0000-0000-000000000000';");
-                    }
+                    // Примеры запросов — только по реально существующим полям в этой секции
+                    sb.AppendLine("QUERIES:");
+                    sb.AppendLine("- GetById: SELECT * FROM dvtable_{" + sectionId + "} WHERE InstanceID = @id;");
 
+                    if (HasField(fields, "State"))
+                        sb.AppendLine("- GetByState: SELECT InstanceID FROM dvtable_{" + sectionId + "} WHERE State = @state;");
+
+                    if (HasField(fields, "Name"))
+                        sb.AppendLine("- FindByName: SELECT TOP 50 InstanceID, Name FROM dvtable_{" + sectionId + "} WHERE Name LIKE @name;");
+
+                    // Можно добавить Created/CreatedBy, если встречаются часто
+                    if (HasField(fields, "Created"))
+                        sb.AppendLine("- RecentCreated: SELECT TOP 100 * FROM dvtable_{" + sectionId + "} WHERE Created >= @fromDate ORDER BY Created DESC;");
+
+                    // Итоговый чанк
                     var content = sb.ToString().TrimEnd();
 
-                    // Ключ чанка — CardType::Section (удобно для фильтрации)
-                    var key = $"{cardGroup.Key}::{sectionAlias}";
-                    result.Add((key, content));
+                    // Ключ чанка — CardType::Section (как и раньше удобно для фильтров)
+                    var chunkKey = cardTypeAlias + "::" + sectionAlias;
+                    result.Add((chunkKey, content));
                 }
             }
 
@@ -89,19 +103,32 @@ namespace ChatGpt
 
             foreach (var (key, content) in chunks)
             {
-                var fileName = $"{SanitizeFileName(key)}.txt";
+                var fileName = SanitizeFileName(key) + ".txt";
                 File.WriteAllText(Path.Combine(outputDir, fileName), content, Encoding.UTF8);
             }
         }
 
-        // ---------- helpers ----------
+        // ----------------- helpers -----------------
 
-        // Только поля текущей секции + гарантируем InstanceID
+        private static string SafeStr(string s, string fallback)
+        {
+            return string.IsNullOrWhiteSpace(s) ? fallback : s.Trim();
+        }
+
+        private static bool HasField(List<Field> fields, string alias)
+        {
+            return fields.Any(f => string.Equals(f.alias, alias, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>Только поля текущей секции + InstanceID.</summary>
         private static List<Field> CollectSectionColumns(Section sec)
         {
-            var list = new List<Field> { new Field { alias = "InstanceID", type = 7, max = 0 } };
+            var list = new List<Field>
+            {
+                new Field { alias = "InstanceID", type = 7, max = 0 } // GUID
+            };
 
-            if (sec?.fields != null)
+            if (sec != null && sec.fields != null)
             {
                 foreach (var f in sec.fields)
                 {
@@ -113,10 +140,10 @@ namespace ChatGpt
             return list;
         }
 
-        // Приоритет: InstanceID, State, Name, RegNumber — затем алфавит
+        /// <summary>Приоритет: ключевые поля впереди, затем по алфавиту.</summary>
         private static IEnumerable<Field> OrderColumns(List<Field> cols)
         {
-            var keyOrder = new[] { "InstanceID", "State", "Name", "RegNumber" };
+            var keyOrder = new[] { "InstanceID", "State", "Name", "RegNumber", "Created", "CreatedBy" };
 
             var head = cols
                 .Where(c => keyOrder.Any(k => k.Equals(c.alias, StringComparison.OrdinalIgnoreCase)))
@@ -129,39 +156,45 @@ namespace ChatGpt
             return head.Concat(tail);
         }
 
-        // Аккуратный human‑friendly тип по коду DV
-        private static string GuessFriendlyType(string alias, int type, int max)
+        /// <summary>
+        /// Человеко-читаемый тип с длиной/точностью. NVARCHAR(max) → NVARCHAR(MAX).
+        /// Коды типов взяты из твоей схемы.
+        /// </summary>
+        private static string FormatType(string alias, int type, int max)
         {
-            var map = new Dictionary<int, string>
+            // маппинг по твоему проекту
+            // 0-INT, 1-BIT, 2-DATETIME, 5-ENUM, 7-GUID, 9-NUMERIC, 10-NVARCHAR, 12-DECIMAL, 13/14-REF, 15-XML, 16-NVARCHAR, 20-DECIMAL
+            switch (type)
             {
-                { 0, "INT" },
-                { 1, "BIT" },
-                { 2, "DATETIME" },
-                { 5, "ENUM" },
-                { 7, "GUID" },
-                { 9, "NUMERIC" },
-                { 10, "NVARCHAR" },
-                { 12, "DECIMAL" },
-                { 13, "REF" },
-                { 14, "REF" },
-                { 15, "XML" },
-                { 16, "NVARCHAR" },
-                { 20, "DECIMAL" }
-            };
-
-            if (map.TryGetValue(type, out var friendly))
-                return friendly;
-
-            if (!string.IsNullOrWhiteSpace(alias))
-            {
-                if (alias.Equals("InstanceID", StringComparison.OrdinalIgnoreCase) ||
-                    alias.Equals("State", StringComparison.OrdinalIgnoreCase) ||
-                    alias.EndsWith("Id", StringComparison.OrdinalIgnoreCase))
-                    return "GUID";
+                case 0: return "INT";
+                case 1: return "BIT";
+                case 2: return "DATETIME";
+                case 5: return "ENUM";
+                case 7: return "GUID";
+                case 9: return "NUMERIC";
+                case 10: // NVARCHAR с длиной
+                case 16:
+                    return max > 0 ? "NVARCHAR(" + max + ")" : "NVARCHAR(MAX)";
+                case 12:
+                case 20:
+                    return "DECIMAL(38,10)";
+                case 13:
+                case 14:
+                    return "REF"; // внешняя ссылка/идентификатор
+                case 15:
+                    return "XML";
+                default:
+                    // эвристика: поля с именем ...Id и т.п. → GUID
+                    if (!string.IsNullOrEmpty(alias))
+                    {
+                        if (alias.Equals("InstanceID", StringComparison.OrdinalIgnoreCase) ||
+                            alias.Equals("State", StringComparison.OrdinalIgnoreCase) ||
+                            alias.EndsWith("Id", StringComparison.OrdinalIgnoreCase))
+                            return "GUID";
+                    }
+                    // по умолчанию NVARCHAR
+                    return max > 0 ? "NVARCHAR(" + max + ")" : "NVARCHAR(MAX)";
             }
-
-            if (max > 0) return "NVARCHAR";
-            return null;
         }
 
         private static string SanitizeFileName(string name)
